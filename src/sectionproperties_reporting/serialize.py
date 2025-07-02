@@ -65,7 +65,7 @@ def load(file_io: TextIO) -> Geometry | CompoundGeometry:
     model_adapter = TypeAdapter(SectionPropertiesSchema)
     model_schema = model_adapter.validate_python(json_data)
     # return model_schema.to_femodel3d()
-    return model_schema
+    return model_schema.root.to_sectionproperties()
 
 
 def loads(model_json: str) -> Geometry | CompoundGeometry:
@@ -77,7 +77,7 @@ def loads(model_json: str) -> Geometry | CompoundGeometry:
     model_adapter = TypeAdapter(SectionPropertiesSchema)
     model_schema = model_adapter.validate_json(model_json)
     # femodel3d = model_schema.to_femodel3d()
-    return model_schema
+    return model_schema.root.to_sectionproperties()
 
 
 def load_dict(model_dict: dict) -> Geometry | CompoundGeometry:
@@ -88,8 +88,7 @@ def load_dict(model_dict: dict) -> Geometry | CompoundGeometry:
     """
     model_adapter = TypeAdapter(SectionPropertiesSchema)
     model_schema = model_adapter.validate_python(model_dict)
-    femodel3d = model_schema.to_femodel3d()
-    return femodel3d
+    return model_schema.root.to_sectionproperties()
 
 
 def get_model_schema(section_geometry: Geometry | CompoundGeometry) -> dict[str, dict]:
@@ -148,7 +147,9 @@ class GeometrySchema(BaseModel, ExporterMixin):
     
     @field_validator("geom", mode="before")
     @classmethod
-    def validate_geom(cls, geom: shapely.Polygon):
+    def validate_geom(cls, geom: str | shapely.Polygon):
+        if isinstance(geom, str):
+            return geom
         return wkt.dumps(geom, trim=True)
 
 
@@ -165,10 +166,23 @@ class GeometrySchema(BaseModel, ExporterMixin):
     def validate_mesh(cls, mesh: dict[str, Any]):
         if mesh is not None:
             serialized_mesh = {}
-            serialized_mesh['vertices'] = mesh['vertices'].tolist()
-            serialized_mesh['vertex_markers'] = mesh['vertex_markers'].tolist()
-            serialized_mesh['triangles'] = mesh['triangles'].tolist()
-            serialized_mesh['triangle_attributes'] = mesh['triangle_attributes'].tolist()
+
+            serialized_mesh['vertices'] = mesh['vertices']
+            if isinstance(mesh['vertices'], np.ndarray):
+                serialized_mesh['vertices'] = mesh['vertices'].tolist()
+
+            serialized_mesh['vertex_markers'] = mesh['vertex_markers']
+            if isinstance(mesh['vertex_markers'], np.ndarray):            
+                serialized_mesh['vertex_markers'] = mesh['vertex_markers'].tolist()
+
+            serialized_mesh['triangles'] = mesh['triangles']
+            if isinstance(mesh['triangles'], np.ndarray):
+                serialized_mesh['triangles'] = mesh['triangles'].tolist()
+
+            serialized_mesh['triangle_attributes'] = mesh['triangle_attributes']
+            if isinstance(mesh['triangle_attributes'], np.ndarray):
+                serialized_mesh['triangle_attributes'] = mesh['triangle_attributes'].tolist()
+
             serialized_mesh['segments'] = mesh['segments']
             serialized_mesh['segment_markers'] = mesh['segment_markers']
             serialized_mesh['regions'] = mesh['regions']
@@ -178,7 +192,8 @@ class GeometrySchema(BaseModel, ExporterMixin):
         sec_prop_class = self._sectionproperties_class
         geom = wkt.loads(self.geom)
         init_dict = self.to_init_dict()
-        init_dict.update({"geom": geom})
+        if "geom" in init_dict:
+            init_dict.update({"geom": geom})
         new_inst = sec_prop_class(**init_dict)
 
         for attr_name, attr_value in self:
@@ -200,6 +215,24 @@ class CompoundGeometrySchema(GeometrySchema):
     _init_attrs: ClassVar[Optional[list[str]]] = ['geoms']
     _sectionproperties_class: ClassVar[type] = CompoundGeometry
 
+    def to_sectionproperties(self):
+        sec_prop_class = self._sectionproperties_class
+        geom = wkt.loads(self.geom)
+        init_dict = self.to_init_dict()
+        if "geoms" in init_dict:
+            init_dict.update({"geoms": geom})
+        new_inst = sec_prop_class(**init_dict)
+
+        for attr_name, attr_value in self:
+            if attr_name in init_dict: continue
+            if attr_name == "mesh" and attr_value is not None:
+                attr_value['vertices'] = np.array(attr_value['vertices'])
+                attr_value['vertex_markers'] = np.array(attr_value['vertex_markers'])
+                attr_value['triangles'] = np.array(attr_value['triangles'])
+                attr_value['triangle_attributes'] = np.array(attr_value['triangle_attributes'])
+            setattr(new_inst, attr_name, attr_value)
+        return new_inst
+
 
 class SectionPropertiesSchema(RootModel, ExporterMixin):
     """
@@ -209,59 +242,5 @@ class SectionPropertiesSchema(RootModel, ExporterMixin):
     root: GeometrySchema | CompoundGeometrySchema 
     _init_attrs: ClassVar[Optional[list[str]]] = None
 
-    # def to_femodel3d(self):
-    #     model_object_classes = {
-    #         "nodes": Node3D.Node3D,
-    #         "materials": Material.Material,
-    #         "sections": Section.Section,
-    #         "springs": Spring3D.Spring3D,
-    #         "members": PhysMember.PhysMember,
-    #         "quads": Quad3D.Quad3D,
-    #         "plates": Plate3D.Plate3D,
-    #         "meshes": Mesh.Mesh,
-    #         "load_combos": LoadCombo.LoadCombo,
-    #     }
-    #     femodel3d = FEModel3D()
-    #     for key, schema_objects in self.__dict__.items():
-    #         model_object_class = model_object_classes[key]
-    #         model_objects = {}
-    #         for key_name, schema_object in schema_objects.items():
-    #             schema_init_dict = schema_object.to_init_dict()
-
-    #             # Modify the init dict with special case attributes
-    #             if "model" in schema_init_dict:
-    #                 # Need to add the model as an attr to several object types
-    #                 schema_init_dict.update({"model": femodel3d})
-    #             if "material" in schema_init_dict:
-    #                 # Need to use the material_name (not the material object) as the init value
-    #                 material_name = schema_init_dict['material'].name
-    #                 schema_init_dict.pop("material")
-    #                 schema_init_dict.update({"material_name": material_name})
-    #             if "section" in schema_init_dict:
-    #                 # Same as material_name above but with the section
-    #                 section_name = schema_init_dict['section'].name
-    #                 schema_init_dict.pop("section")
-    #                 schema_init_dict.update({"section_name": section_name})
-                    
-    #             # Create the new object with their init values
-    #             new_object = model_object_class(**schema_init_dict)
-                
-    #             # Add in all of the other attrs excluded from the init process
-    #             for attr_name, attr_value in schema_object.__dict__.items():
-    #                 if attr_name == "model":
-    #                     attr_value = femodel3d
-    #                 if schema_init_dict is None or attr_name not in schema_init_dict:
-    #                     setattr(new_object, attr_name, attr_value)
-
-    #             # For attr_values that reference nodes, they must reference the original
-    #             # node in the model (an new-but-equal instance will not suffice because it will 
-    #             # not have the correct .ID attribute).
-    #             for attr_name, attr_value in new_object.__dict__.items():
-    #                 if 'node' in attr_name:
-    #                     node_name = attr_value.name
-    #                     orig_node = femodel3d.nodes[node_name]
-    #                     setattr(new_object, attr_name, orig_node)
-                    
-    #             model_objects.update({key_name: new_object})
-    #         setattr(femodel3d, key, model_objects)
-    #     return femodel3d
+    def to_sectionproperties(self):
+        return self.root.to_sectionproperties()
