@@ -7,7 +7,11 @@ authors = [
     { name = "Connor Ferster", email = "connorferster@gmail.com" }
 ]
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "numpydantic>=1.6.9",
+    "pydantic>=2.11.7",
+    "sectionproperties>=3.9.0",
+]
 
 [project.scripts]
 sectionproperties-reporting = "sectionproperties_reporting:main"
